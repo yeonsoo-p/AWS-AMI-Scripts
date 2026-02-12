@@ -53,7 +53,7 @@ Parameters:
 
   ImageId:
     Type: AWS::EC2::Image::Id
-    Default: ami-0a76a5e62cb4d16a5
+    Default: ami-0f830b5339ce5c8dc
     Description: AMI ID for the EC2 instance
 
   KeyName:
@@ -107,10 +107,6 @@ Resources:
               command: snap install code --classic
           packages:
             apt:
-              unzip: []
-              rsync: []
-              git: []
-              build-essential: []
               ninja-build: []
               libglew-dev: []
               libglfw3-dev: []
