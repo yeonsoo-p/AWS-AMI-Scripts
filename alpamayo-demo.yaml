@@ -1,0 +1,298 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CloudFormation template for Alpamayo-Demo CarMaker simulation environment.
+  Launches a g5 GPU instance with all dependencies and HD scenario data.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Instance Configuration
+        Parameters:
+          - InstanceType
+          - ImageId
+          - KeyName
+          - IamInstanceProfile
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - SubnetId
+          - SecurityGroupId
+      - Label:
+          default: Application Configuration
+        Parameters:
+          - S3ScenarioBucket
+    ParameterLabels:
+      InstanceType:
+        default: Instance Type
+      ImageId:
+        default: AMI ID
+      KeyName:
+        default: SSH Key Pair Name
+      IamInstanceProfile:
+        default: IAM Instance Profile
+      SubnetId:
+        default: Subnet ID
+      SecurityGroupId:
+        default: Security Group ID
+      S3ScenarioBucket:
+        default: S3 Scenario Bucket
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: g5.12xlarge
+    AllowedValues:
+      - g5.xlarge
+      - g5.2xlarge
+      - g5.4xlarge
+      - g5.8xlarge
+      - g5.12xlarge
+      - g5.16xlarge
+    Description: EC2 instance type with NVIDIA A10G GPU
+
+  ImageId:
+    Type: AWS::EC2::Image::Id
+    Default: ami-0a76a5e62cb4d16a5
+    Description: AMI ID for the EC2 instance
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: aws-gpu-server-1
+    Description: SSH key pair name for instance access
+
+  IamInstanceProfile:
+    Type: String
+    Default: EC2_DCV_AccessS3
+    Description: IAM instance profile for S3 and DCV access
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-0fb435467b48c5c9f
+    Description: Subnet ID for the EC2 instance
+
+  SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Default: sg-0bc48c7de4d3f9fa1
+    Description: Security group ID for the EC2 instance
+
+  S3ScenarioBucket:
+    Type: String
+    Default: hd-scenarios
+    Description: S3 bucket containing HD scenario zip files
+
+Resources:
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT60M
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          default:
+            - install_packages
+            - setup_workspace
+            - download_scenarios
+            - build_application
+            - set_permissions
+            - set_movienx
+
+        install_packages:
+          commands:
+            01_cmake:
+              command: snap install cmake --classic
+            02_vscode:
+              command: snap install code --classic
+          packages:
+            apt:
+              unzip: []
+              rsync: []
+              git: []
+              build-essential: []
+              ninja-build: []
+              libglew-dev: []
+              libglfw3-dev: []
+
+
+        setup_workspace:
+          commands:
+            01_create_workspace:
+              command: mkdir -p /home/ubuntu/workspace
+            02_clone_repo:
+              command: |
+                cd /home/ubuntu/workspace
+                git clone https://gitlab.ipg-automotive.co.kr/demo/alpamayo-demo.git
+                
+
+        download_scenarios:
+          commands:
+            01_download_a9_garching:
+              command: !Sub aws s3 cp s3://${S3ScenarioBucket}/A9_Garching_Autumn_Cloudy.zip /home/ubuntu/workspace/
+              cwd: /home/ubuntu/workspace
+            02_download_chinese_tollway:
+              command: !Sub aws s3 cp s3://${S3ScenarioBucket}/ChineseTollway.zip /home/ubuntu/workspace/
+              cwd: /home/ubuntu/workspace
+            03_download_city_tunnel:
+              command: !Sub aws s3 cp s3://${S3ScenarioBucket}/CityTunnel.zip /home/ubuntu/workspace/
+              cwd: /home/ubuntu/workspace
+            04_download_parking_garage:
+              command: !Sub aws s3 cp s3://${S3ScenarioBucket}/Entering_ParkingGarage.zip /home/ubuntu/workspace/
+              cwd: /home/ubuntu/workspace
+            05_download_mountain_road:
+              command: !Sub aws s3 cp s3://${S3ScenarioBucket}/MountainRoad_Winter.zip /home/ubuntu/workspace/
+              cwd: /home/ubuntu/workspace
+            06_download_san_francisco:
+              command: !Sub aws s3 cp s3://${S3ScenarioBucket}/SanFrancisco_Driving_Summer.zip /home/ubuntu/workspace/
+              cwd: /home/ubuntu/workspace
+            07_download_suburban_street:
+              command: !Sub aws s3 cp s3://${S3ScenarioBucket}/SuburbanStreet.zip /home/ubuntu/workspace/
+              cwd: /home/ubuntu/workspace
+            08_download_uk_countryroad:
+              command: !Sub aws s3 cp s3://${S3ScenarioBucket}/UK_CountryRoad.zip /home/ubuntu/workspace/
+              cwd: /home/ubuntu/workspace
+            09_download_uk_highway:
+              command: !Sub aws s3 cp s3://${S3ScenarioBucket}/UK_Highway_Dry.zip /home/ubuntu/workspace/
+              cwd: /home/ubuntu/workspace
+            10_extract_scenarios:
+              command: |
+                cd /home/ubuntu/workspace
+                for zip in *.zip; do
+                  if [ -f "$zip" ]; then
+                    unzip -o "$zip"
+                    dir="${zip%.zip}"
+                    if [ -d "$dir" ]; then
+                      rsync -a "./$dir/" ./alpamayo-demo/
+                      rm -rf "./$dir"
+                    fi
+                    rm -f "$zip"
+                  fi
+                done
+              cwd: /home/ubuntu/workspace
+
+        build_application:
+          commands:
+            01_build_carmaker:
+              command: make
+              cwd: /home/ubuntu/workspace/alpamayo-demo/src
+              ignoreErrors: true
+            02_buildconfig_display:
+              command: cmake -B build -G Ninja
+              cwd: /home/ubuntu/workspace/alpamayo-demo/camerarsi_display
+              ignoreErrors: true
+            03_build_display:
+              command: cmake --build build --config Release
+              cwd: /home/ubuntu/workspace/alpamayo-demo/camerarsi_display
+              ignoreErrors: true
+        
+        set_permissions:
+          commands:
+            01_set_ownership:
+              command: chown -R ubuntu:ubuntu /home/ubuntu/workspace
+            02_set_permissions:
+              command: chmod -R 755 /home/ubuntu/workspace
+
+        set_movienx:
+          commands:
+            01_timeout:
+              command: sed -i '/^exec / s/$/ -aposubscribetimeout 20000/' /opt/ipg/movienx/linux64-15.0/bin/MovieNX
+              ignoreErrors: true
+            02_profile:
+              command: sed -i '/^exec / s/$/ -profile DEMO/' /opt/ipg/movienx/linux64-15.0/bin/MovieNX
+              ignoreErrors: true
+            03_optimize:
+              command: sed -i '/^exec / s/$/ -disablequantitybuffering/' /opt/ipg/movienx/linux64-15.0/bin/MovieNX
+              ignoreErrors: true
+            
+
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref ImageId
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref IamInstanceProfile
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          SubnetId: !Ref SubnetId
+          GroupSet:
+            - !Ref SecurityGroupId
+          AssociatePublicIpAddress: true
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 100
+            VolumeType: gp3
+            Iops: 3000
+            DeleteOnTermination: true
+            Encrypted: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+          echo "Starting CloudFormation initialization..."
+
+          # Update system
+          apt update
+          apt upgrade -y
+
+          apt install -y python3-pip python3-setuptools
+
+          # Install AWS CloudFormation helper scripts
+          pip3 install --break-system-packages https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+
+          # Create symlinks for cfn scripts
+          ln -sf /usr/local/bin/cfn-* /usr/bin/ 2>/dev/null || true
+
+          # Run cfn-init
+          /usr/local/bin/cfn-init -v \
+            --stack ${AWS::StackName} \
+            --resource EC2Instance \
+            --configsets default \
+            --region ${AWS::Region}
+
+          INIT_STATUS=$?
+
+          # Signal completion to CloudFormation
+          /usr/local/bin/cfn-signal -e $INIT_STATUS \
+            --stack ${AWS::StackName} \
+            --resource EC2Instance \
+            --region ${AWS::Region}
+
+          if [ $INIT_STATUS -eq 0 ]; then
+            reboot
+          fi
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-instance'
+        - Key: Application
+          Value: Alpamayo-Demo
+        - Key: Environment
+          Value: Development
+
+Outputs:
+  InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref EC2Instance
+    Export:
+      Name: !Sub '${AWS::StackName}-InstanceId'
+
+  PublicIp:
+    Description: Public IP address of the instance
+    Value: !GetAtt EC2Instance.PublicIp
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicIp'
+
+  PrivateIp:
+    Description: Private IP address of the instance
+    Value: !GetAtt EC2Instance.PrivateIp
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateIp'
+
+  SSHCommand:
+    Description: SSH command to connect to the instance
+    Value: !Sub 'ssh -i ${KeyName}.pem ubuntu@${EC2Instance.PublicIp}'
+
+  DCVUrl:
+    Description: NICE DCV URL for remote desktop access
+    Value: !Sub 'https://${EC2Instance.PublicIp}:8443'
